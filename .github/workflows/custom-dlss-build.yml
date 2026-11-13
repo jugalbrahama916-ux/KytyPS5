@@ -44,6 +44,7 @@ jobs:
         with:
           version: '6.7.2'
           arch: 'win64_msvc2022_64'
+          setup-python: 'false'
 
       - name: Configure and Build with clang-cl
         shell: cmd
