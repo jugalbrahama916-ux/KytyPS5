@@ -13,6 +13,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Pin Python 3.12 for Qt Installer
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Merge Latest Upstream KytyPS5 (DLSS + FSR + Latest Fixes)
         shell: pwsh
         run: |
@@ -20,16 +25,12 @@ jobs:
           git config user.email "builder@local.dev"
           git remote add upstream https://github.com/KytyPS5/KytyPS5.git
           git fetch upstream main
-          # Merge upstream changes, favoring upstream for new PSSR/DLSS/FSR modules while preserving U59 presets
-          git merge upstream/main -X theirs --no-edit || Write-Host "Resolved conflicts via strategy"
+          git merge upstream/main -X theirs --no-edit
           git submodule update --init --recursive
 
-      - name: Fetch Official NVIDIA DLSS DLL (v310.9.16) & Set Default Local Path
+      - name: Patch Default DLSS Path to Executable Directory
         shell: pwsh
         run: |
-          # Download official NVIDIA DLSS SDK runtime DLL
-          New-Item -ItemType Directory -Force -Path "$env:TEMP\dlss_bin" | Out-Null
-          # Patch DLSS search path in source so it automatically checks the emulator root directory first
           Get-ChildItem -Path src -Recurse -Include *.cpp,*.h | ForEach-Object {
             $content = Get-Content $_.FullName -Raw
             if ($content -match "nvngx_dlss\.dll") {
@@ -38,7 +39,7 @@ jobs:
             }
           }
 
-      - name: Install Qt 6 & glslang
+      - name: Install Qt 6
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.7.2'
@@ -51,8 +52,18 @@ jobs:
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
           cmake --build build --config Release --parallel
 
+      - name: Package Clean Release Folder with Bundled DLSS
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "build\*.exe" -Destination "dist\" -Force -ErrorAction SilentlyContinue
+          Copy-Item "build\*.dll" -Destination "dist\" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "u59-preset.json") { Copy-Item "u59-preset.json" -Destination "dist\" -Force }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/NVIDIA/DLSS/v310.9.16/lib/Windows_x86_64/rel/nvngx_dlss.dll" -OutFile "dist\nvngx_dlss.dll"
+          windeployqt "dist\launcher.exe" --no-translations --no-system-d3d-compiler --no-opengl-sw
+
       - name: Upload Ready-to-Run Artifact
         uses: actions/upload-artifact@v4
         with:
           name: KytyPS5-U59-Latest-DLSS-Win64
-          path: build/
+          path: dist/
