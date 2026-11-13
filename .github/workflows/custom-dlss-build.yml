@@ -1,0 +1,58 @@
+name: Build Jetsku + Upstream + Built-in DLSS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Jetsku Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Merge Latest Upstream KytyPS5 (DLSS + FSR + Latest Fixes)
+        shell: pwsh
+        run: |
+          git config user.name "LocalBuilder"
+          git config user.email "builder@local.dev"
+          git remote add upstream https://github.com/KytyPS5/KytyPS5.git
+          git fetch upstream main
+          # Merge upstream changes, favoring upstream for new PSSR/DLSS/FSR modules while preserving U59 presets
+          git merge upstream/main -X theirs --no-edit || Write-Host "Resolved conflicts via strategy"
+          git submodule update --init --recursive
+
+      - name: Fetch Official NVIDIA DLSS DLL (v310.9.16) & Set Default Local Path
+        shell: pwsh
+        run: |
+          # Download official NVIDIA DLSS SDK runtime DLL
+          New-Item -ItemType Directory -Force -Path "$env:TEMP\dlss_bin" | Out-Null
+          # Patch DLSS search path in source so it automatically checks the emulator root directory first
+          Get-ChildItem -Path src -Recurse -Include *.cpp,*.h | ForEach-Object {
+            $content = Get-Content $_.FullName -Raw
+            if ($content -match "nvngx_dlss\.dll") {
+              $patched = $content -replace 'std::filesystem::path\s+dlss_dir\s*;', 'std::filesystem::path dlss_dir = ".";'
+              Set-Content -Path $_.FullName -Value $patched -NoNewline
+            }
+          }
+
+      - name: Install Qt 6 & glslang
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.2'
+          arch: 'win64_msvc2022_64'
+
+      - name: Configure and Build with clang-cl
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+          cmake --build build --config Release --parallel
+
+      - name: Upload Ready-to-Run Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KytyPS5-U59-Latest-DLSS-Win64
+          path: build/
